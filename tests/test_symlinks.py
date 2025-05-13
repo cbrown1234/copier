@@ -7,7 +7,7 @@ from plumbum import local
 from copier import run_copy, run_update
 from copier.errors import DirtyLocalWarning
 
-from .helpers import build_file_tree, git
+from .helpers import build_file_tree, git, git_save
 
 
 def test_copy_symlink(tmp_path_factory: pytest.TempPathFactory) -> None:
@@ -461,3 +461,119 @@ def test_symlinked_dir_expanded(tmp_path_factory: pytest.TempPathFactory) -> Non
     assert (dst / "a_dir" / "a_file.txt").read_text() == "some content"
     assert (dst / "a_symlinked_dir" / "a_file.txt").read_text() == "some content"
     assert (dst / "a_nested" / "symlink" / "a_file.txt").read_text() == "some content"
+
+
+def test_delete_symlink(tmp_path_factory: pytest.TempPathFactory) -> None:
+    src, dst = map(tmp_path_factory.mktemp, ("src", "dst"))
+
+    build_file_tree(
+        {
+            src / "copier.yml": """\
+                _preserve_symlinks: true
+            """,
+            src / ".copier-answers.yml.jinja": """\
+                # Changes here will be overwritten by Copier
+                {{ _copier_answers|to_nice_yaml }}
+            """,
+            src / "aaaa.txt": """
+                Lorem ipsum
+            """,
+            src / "symlink.txt": Path("./aaaa.txt"),
+        }
+    )
+
+    git_save(src, tag="v1")
+
+    run_copy(str(src), dst, defaults=True)
+    assert (dst / "symlink.txt").is_symlink()
+
+    Path(src / "symlink.txt").unlink()
+    git_save(src, tag="v2")
+
+    # dst must be vcs-tracked to use run_update
+    git_save(dst)
+    run_update(dst, defaults=True, overwrite=True)
+
+    assert not (dst / "symlink.txt").exists()
+    assert not (dst / "symlink.txt").is_symlink()
+
+
+def test_delete_symlink_subdirectory(tmp_path_factory: pytest.TempPathFactory) -> None:
+    src, dst = map(tmp_path_factory.mktemp, ("src", "dst"))
+    tmpl = src / "template"
+    tmpl.mkdir()
+    build_file_tree(
+        {
+            src / "copier.yml": """\
+                _preserve_symlinks: true
+                _subdirectory: "template"
+                _message_before_copy: "Hello world"
+                _message_before_update: "Hello world"
+                _message_after_update: "Goodbye world"
+            """,
+            tmpl / ".copier-answers.yml.jinja": """\
+                # Changes here will be overwritten by Copier
+                {{ _copier_answers|to_nice_yaml }}
+            """,
+            tmpl / "aaaa.txt": """
+                Lorem ipsum
+            """,
+            tmpl / "symlink.txt": Path("./aaaa.txt"),
+        }
+    )
+
+    git_save(src, tag="v1")
+
+    run_copy(str(src), dst, defaults=True)
+    assert (dst / "symlink.txt").is_symlink()
+
+    (tmpl / "symlink.txt").unlink()
+    git_save(src, tag="v2")
+
+    # dst must be vcs-tracked to use run_update
+    git_save(dst)
+    run_update(dst, defaults=True, overwrite=True)
+
+    assert not (dst / "symlink.txt").exists()
+    assert not (dst / "symlink.txt").is_symlink()
+
+
+def test_delete_symlink_subdirectory_answer(
+    tmp_path_factory: pytest.TempPathFactory,
+) -> None:
+    src, dst = map(tmp_path_factory.mktemp, ("src", "dst"))
+    tmpl = src / "template"
+    tmpl.mkdir()
+    build_file_tree(
+        {
+            src / "copier.yml": """\
+                _preserve_symlinks: true
+                _subdirectory: "template"
+                _message_before_copy: "Hello world"
+                _message_before_update: "Hello world"
+                _message_after_update: "Goodbye world"
+                create_symlink:
+                    type: bool
+            """,
+            tmpl / ".copier-answers.yml.jinja": """\
+                # Changes here will be overwritten by Copier
+                {{ _copier_answers|to_nice_yaml }}
+            """,
+            tmpl / "aaaa.txt": """
+                Lorem ipsum
+            """,
+            tmpl / "{% if create_symlink %}symlink.txt{% endif%}": Path("./aaaa.txt"),
+        }
+    )
+
+    git_save(src, tag="v1")
+
+    run_copy(str(src), dst, data={"create_symlink": True}, defaults=True)
+    assert (dst / "symlink.txt").is_symlink()
+
+    # dst must be vcs-tracked to use run_update
+    git_save(dst)
+    run_update(dst, data={"create_symlink": False}, defaults=True, overwrite=True)
+
+    assert not (dst / "symlink.txt").exists()
+    assert not (dst / "symlink.txt").is_symlink()
